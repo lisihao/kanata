@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo nextest:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo audit)",
+      "Bash(cargo doc:*)",
+      "Bash(rustfmt:*)"
+    ],
+    "deny": [
+      "Bash(cargo publish:*)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)"
+    ]
+  },
+  "hooks": {
+    "pre-commit": [
+      "cargo fmt --all --check",
+      "cargo clippy --all-targets --all-features -- -D warnings"
+    ]
+  },
+  "env": {
+    "RUST_LOG": "info",
+    "RUST_BACKTRACE": "1"
+  }
+}

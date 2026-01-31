@@ -53,6 +53,9 @@ impl Tool for BashTool {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `KanataError` if the command parameter is missing or execution fails.
     async fn execute(&self, input: serde_json::Value) -> Result<ToolResult, KanataError> {
         let command = input
             .get("command")
@@ -64,7 +67,7 @@ impl Tool for BashTool {
 
         let timeout_secs = input
             .get("timeout")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
             .min(600);
 
@@ -109,9 +112,13 @@ impl Tool for BashTool {
                     combined.push_str(&stderr);
                 }
 
-                // Truncate if too long.
+                // Truncate if too long (at a valid UTF-8 boundary).
                 if combined.len() > MAX_OUTPUT_BYTES {
-                    combined.truncate(MAX_OUTPUT_BYTES);
+                    let mut end = MAX_OUTPUT_BYTES;
+                    while end > 0 && !combined.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    combined.truncate(end);
                     combined.push_str("\n... (output truncated)");
                 }
 

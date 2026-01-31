@@ -32,6 +32,10 @@ impl ProjectMemory {
     }
 
     /// Saves the memory to its file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no path is set, or serialization/writing fails.
     pub fn save(&self) -> Result<(), String> {
         let path = self
             .path

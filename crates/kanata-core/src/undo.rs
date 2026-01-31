@@ -51,30 +51,31 @@ impl UndoManager {
 
     /// Undoes the most recent operation. Returns a description of what was
     /// undone, or an error if the stack is empty or the rollback fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the undo stack is empty or the file operation fails.
     pub fn undo(&mut self) -> Result<String, String> {
         let entry = self
             .stack
             .pop_back()
             .ok_or_else(|| "Nothing to undo".to_string())?;
 
-        match &entry.previous_content {
-            Some(content) => {
-                std::fs::write(&entry.path, content)
-                    .map_err(|e| format!("Failed to restore {}: {e}", entry.path.display()))?;
-                Ok(format!("Undone: {} (restored {})", entry.description, entry.path.display()))
+        if let Some(content) = &entry.previous_content {
+            std::fs::write(&entry.path, content)
+                .map_err(|e| format!("Failed to restore {}: {e}", entry.path.display()))?;
+            Ok(format!("Undone: {} (restored {})", entry.description, entry.path.display()))
+        } else {
+            // File was newly created — remove it.
+            if entry.path.exists() {
+                std::fs::remove_file(&entry.path)
+                    .map_err(|e| format!("Failed to remove {}: {e}", entry.path.display()))?;
             }
-            None => {
-                // File was newly created — remove it.
-                if entry.path.exists() {
-                    std::fs::remove_file(&entry.path)
-                        .map_err(|e| format!("Failed to remove {}: {e}", entry.path.display()))?;
-                }
-                Ok(format!(
-                    "Undone: {} (removed {})",
-                    entry.description,
-                    entry.path.display()
-                ))
-            }
+            Ok(format!(
+                "Undone: {} (removed {})",
+                entry.description,
+                entry.path.display()
+            ))
         }
     }
 

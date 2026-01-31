@@ -29,7 +29,7 @@ pub fn review_skill() -> SkillDefinition {
     SkillDefinition {
         name: "review".to_string(),
         description: "Review code changes and provide feedback.".to_string(),
-        prompt_template: r#"Review the current code changes and provide feedback.
+        prompt_template: r"Review the current code changes and provide feedback.
 
 Steps:
 1. Run `git diff` to see the changes.
@@ -43,7 +43,7 @@ Steps:
 Output format:
 - Start with a brief summary.
 - List issues by severity (critical > warning > suggestion).
-- End with an overall assessment."#
+- End with an overall assessment."
             .to_string(),
     }
 }
@@ -53,7 +53,7 @@ pub fn explain_skill() -> SkillDefinition {
     SkillDefinition {
         name: "explain".to_string(),
         description: "Explain how a file or code section works.".to_string(),
-        prompt_template: r#"Explain the selected code or file to the user.
+        prompt_template: r"Explain the selected code or file to the user.
 
 Steps:
 1. Read the specified file or code section.
@@ -65,7 +65,7 @@ Guidelines:
 - Walk through the main logic flow.
 - Highlight non-obvious patterns or design decisions.
 - Note any potential issues or areas for improvement.
-- Use clear, jargon-free language when possible."#
+- Use clear, jargon-free language when possible."
             .to_string(),
     }
 }

@@ -53,13 +53,16 @@ impl Tool for EditTool {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `KanataError` if parameters are missing, the file is not found, or I/O fails.
     async fn execute(&self, input: serde_json::Value) -> Result<ToolResult, KanataError> {
         let path = require_str(&input, "path", "Edit")?;
         let old_string = require_str(&input, "old_string", "Edit")?;
         let new_string = require_str(&input, "new_string", "Edit")?;
         let replace_all = input
             .get("replace_all")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         let content = tokio::fs::read_to_string(path)

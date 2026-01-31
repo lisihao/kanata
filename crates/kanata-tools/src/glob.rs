@@ -48,6 +48,9 @@ impl Tool for GlobTool {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `KanataError` if the pattern parameter is missing or the glob is invalid.
     async fn execute(&self, input: serde_json::Value) -> Result<ToolResult, KanataError> {
         let pattern = input
             .get("pattern")

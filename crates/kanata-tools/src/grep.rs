@@ -56,6 +56,9 @@ impl Tool for GrepTool {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `KanataError` if the pattern parameter is missing or the regex/glob is invalid.
     async fn execute(&self, input: serde_json::Value) -> Result<ToolResult, KanataError> {
         let pattern_str = input
             .get("pattern")

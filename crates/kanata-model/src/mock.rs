@@ -168,7 +168,7 @@ mod tests {
             .into_iter()
             .filter_map(Result::ok)
             .collect();
-        assert!(events.len() == 2);
+        assert_eq!(events.len(), 2);
         assert!(matches!(&events[0], StreamEvent::TextDelta(_)));
         assert!(matches!(&events[1], StreamEvent::MessageEnd { .. }));
     }

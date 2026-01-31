@@ -45,6 +45,9 @@ impl Tool for WriteTool {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `KanataError` if parameters are missing or the file cannot be written.
     async fn execute(&self, input: serde_json::Value) -> Result<ToolResult, KanataError> {
         let path = input
             .get("path")

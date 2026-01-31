@@ -2,79 +2,88 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream;
 use futures::{Stream, StreamExt};
-use tokio::sync::Mutex;
 
 use kanata_types::error::KanataError;
 use kanata_types::llm::{LLMClient, StreamEvent, TokenUsage};
 use kanata_types::message::{Message, Role};
 use kanata_types::session::{AgentEvent, AgentSession, SessionTokenStats};
-use kanata_types::tool::{Tool, ToolDefinition};
+use kanata_types::tool::ToolDefinition;
+
+use crate::dispatcher::ToolDispatcher;
+
+/// Maximum number of consecutive tool-use turns before aborting.
+const MAX_TOOL_TURNS: usize = 20;
 
 /// The core agent that drives the conversation loop.
 pub struct Agent {
     llm: Box<dyn LLMClient>,
-    tools: Vec<Box<dyn Tool>>,
-    messages: Arc<Mutex<Vec<Message>>>,
+    dispatcher: ToolDispatcher,
+    messages: std::sync::Mutex<Vec<Message>>,
     system_prompt: String,
-    stats: Arc<Mutex<SessionTokenStats>>,
+    stats: std::sync::Mutex<SessionTokenStats>,
 }
 
 impl Agent {
     /// Creates a new agent with the given LLM client and tools.
     pub fn new(
         llm: Box<dyn LLMClient>,
-        tools: Vec<Box<dyn Tool>>,
+        tools: Vec<Box<dyn kanata_types::tool::Tool>>,
         system_prompt: impl Into<String>,
     ) -> Self {
         let model = llm.model_name().to_string();
         Self {
             llm,
-            tools,
-            messages: Arc::new(Mutex::new(Vec::new())),
+            dispatcher: ToolDispatcher::new(tools),
+            messages: std::sync::Mutex::new(Vec::new()),
             system_prompt: system_prompt.into(),
-            stats: Arc::new(Mutex::new(SessionTokenStats {
+            stats: std::sync::Mutex::new(SessionTokenStats {
                 model,
                 ..SessionTokenStats::default()
-            })),
+            }),
         }
     }
 
     /// Returns tool definitions for all registered tools.
     fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.iter().map(|t| t.definition()).collect()
-    }
-
-    /// Finds a tool by name.
-    fn find_tool(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools
-            .iter()
-            .find(|t| t.definition().name == name)
-            .map(AsRef::as_ref)
+        self.dispatcher.definitions()
     }
 
     /// Accumulates token usage into session stats.
-    async fn accumulate_usage(&self, usage: &TokenUsage) {
-        let mut stats = self.stats.lock().await;
-        stats.total_input_tokens += usage.input_tokens;
-        stats.total_output_tokens += usage.output_tokens;
-        stats.total_cost_usd += usage.cost_usd;
+    fn accumulate_usage(&self, usage: &TokenUsage) {
+        if let Ok(mut stats) = self.stats.lock() {
+            stats.total_input_tokens += usage.input_tokens;
+            stats.total_output_tokens += usage.output_tokens;
+            stats.total_cost_usd += usage.cost_usd;
+        }
     }
 
-    /// Runs one turn: sends messages to LLM, collects response, handles tool
-    /// calls. Returns a list of `AgentEvent`s for the CLI to render.
-    fn run_turn(&self) -> Pin<Box<dyn Future<Output = Result<Vec<AgentEvent>, KanataError>> + Send + '_>> {
-        Box::pin(self.run_turn_inner())
+    /// Runs one turn with a depth limit to prevent unbounded recursion.
+    fn run_turn(
+        &self,
+        depth: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentEvent>, KanataError>> + Send + '_>> {
+        Box::pin(self.run_turn_inner(depth))
     }
 
-    async fn run_turn_inner(&self) -> Result<Vec<AgentEvent>, KanataError> {
+    /// Inner implementation of a single agent turn.
+    async fn run_turn_inner(&self, depth: usize) -> Result<Vec<AgentEvent>, KanataError> {
+        if depth >= MAX_TOOL_TURNS {
+            return Ok(vec![AgentEvent::Error(format!(
+                "Reached maximum tool recursion depth ({MAX_TOOL_TURNS})"
+            ))]);
+        }
+
         let mut events = vec![AgentEvent::Thinking];
         let tool_defs = self.tool_definitions();
-        let messages = self.messages.lock().await.clone();
+        let messages = self
+            .messages
+            .lock()
+            .map_err(|e| KanataError::Config(format!("Lock poisoned: {e}")))?
+            .clone();
 
         let mut llm_stream = self
             .llm
@@ -82,9 +91,9 @@ impl Agent {
             .await?;
 
         let mut text_accum = String::new();
-        let mut tool_name = String::new();
-        let mut tool_id = String::new();
-        let mut tool_input_json = String::new();
+        let mut current_tool_name = String::new();
+        let mut current_tool_id = String::new();
+        let mut current_tool_input = String::new();
         let mut pending_tool_calls: Vec<(String, String, String)> = Vec::new();
         let mut final_usage: Option<TokenUsage> = None;
 
@@ -95,18 +104,18 @@ impl Agent {
                     text_accum.push_str(&text);
                 }
                 StreamEvent::ToolUseStart { id, name } => {
-                    tool_id = id;
-                    tool_name = name;
-                    tool_input_json.clear();
+                    current_tool_id = id;
+                    current_tool_name = name;
+                    current_tool_input.clear();
                 }
                 StreamEvent::ToolUseDelta(delta) => {
-                    tool_input_json.push_str(&delta);
+                    current_tool_input.push_str(&delta);
                 }
                 StreamEvent::ToolUseEnd => {
                     pending_tool_calls.push((
-                        tool_id.clone(),
-                        tool_name.clone(),
-                        tool_input_json.clone(),
+                        current_tool_id.clone(),
+                        current_tool_name.clone(),
+                        current_tool_input.clone(),
                     ));
                 }
                 StreamEvent::MessageEnd { usage } => {
@@ -118,73 +127,113 @@ impl Agent {
             }
         }
 
-        // Append assistant message to history.
-        if !text_accum.is_empty() {
-            let mut msgs = self.messages.lock().await;
+        // Build the assistant message with proper content blocks (Anthropic format).
+        let assistant_content = build_assistant_content(&text_accum, &pending_tool_calls);
+        if assistant_content != serde_json::Value::Null
+            && let Ok(mut msgs) = self.messages.lock()
+        {
             msgs.push(Message {
                 role: Role::Assistant,
-                content: serde_json::Value::String(text_accum),
+                content: assistant_content,
             });
         }
 
         if let Some(usage) = &final_usage {
-            self.accumulate_usage(usage).await;
+            self.accumulate_usage(usage);
         }
 
         // Execute any tool calls.
         if !pending_tool_calls.is_empty() {
             for (call_id, name, input_json) in &pending_tool_calls {
-                let input_preview =
-                    truncate_str(input_json, 100).to_string();
                 events.push(AgentEvent::ToolStart {
                     name: name.clone(),
-                    input_preview,
+                    input_preview: truncate_string(input_json, 100),
                 });
 
                 let input: serde_json::Value =
                     serde_json::from_str(input_json).unwrap_or_default();
 
-                let result = if let Some(tool) = self.find_tool(name) {
-                    match tool.execute(input).await {
-                        Ok(r) => r,
-                        Err(e) => kanata_types::ToolResult {
-                            content: e.to_string(),
-                            is_error: true,
-                        },
-                    }
-                } else {
-                    kanata_types::ToolResult {
-                        content: format!("Unknown tool: {name}"),
+                let result = match self.dispatcher.dispatch(name, input).await {
+                    Ok(r) => r,
+                    Err(e) => kanata_types::ToolResult {
+                        content: e.to_string(),
                         is_error: true,
-                    }
+                    },
                 };
 
-                let result_preview =
-                    truncate_str(&result.content, 200).to_string();
                 events.push(AgentEvent::ToolEnd {
                     name: name.clone(),
-                    result_preview,
+                    result_preview: truncate_string(&result.content, 200),
                 });
 
                 // Add tool result to message history for next turn.
-                let mut msgs = self.messages.lock().await;
-                msgs.push(Message {
-                    role: Role::User,
-                    content: serde_json::json!([{
-                        "type": "tool_result",
-                        "tool_use_id": call_id,
-                        "content": result.content,
-                        "is_error": result.is_error,
-                    }]),
-                });
+                if let Ok(mut msgs) = self.messages.lock() {
+                    msgs.push(Message {
+                        role: Role::User,
+                        content: serde_json::json!([{
+                            "type": "tool_result",
+                            "tool_use_id": call_id,
+                            "content": result.content,
+                            "is_error": result.is_error,
+                        }]),
+                    });
+                }
             }
 
-            // Recurse: send tool results back to LLM for a follow-up.
-            let follow_up = self.run_turn().await?;  // boxed recursion
+            // Recurse with incremented depth.
+            let follow_up = self.run_turn(depth + 1).await?;
             events.extend(follow_up);
         }
 
         Ok(events)
+    }
+}
+
+/// Builds an assistant content value in Anthropic Messages API format.
+///
+/// Returns an array of content blocks: text blocks and `tool_use` blocks.
+fn build_assistant_content(
+    text: &str,
+    tool_calls: &[(String, String, String)],
+) -> serde_json::Value {
+    let mut blocks = Vec::new();
+
+    if !text.is_empty() {
+        blocks.push(serde_json::json!({
+            "type": "text",
+            "text": text,
+        }));
+    }
+
+    for (id, name, input_json) in tool_calls {
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap_or_default();
+        blocks.push(serde_json::json!({
+            "type": "tool_use",
+            "id": id,
+            "name": name,
+            "input": input,
+        }));
+    }
+
+    if blocks.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::Array(blocks)
+    }
+}
+
+/// Truncates a string to at most `max_len` bytes at a valid UTF-8 boundary,
+/// appending `...` if truncated.
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        // Find the last valid char boundary at or before max_len.
+        let mut end = max_len;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 
@@ -195,8 +244,7 @@ impl AgentSession for Agent {
         content: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = AgentEvent> + Send>>, KanataError> {
         // Add user message to history.
-        {
-            let mut msgs = self.messages.lock().await;
+        if let Ok(mut msgs) = self.messages.lock() {
             msgs.push(Message {
                 role: Role::User,
                 content: serde_json::Value::String(content.to_string()),
@@ -204,15 +252,14 @@ impl AgentSession for Agent {
         }
 
         // Increment turn count.
-        {
-            let mut stats = self.stats.lock().await;
+        if let Ok(mut stats) = self.stats.lock() {
             stats.turns += 1;
         }
 
-        let events = self.run_turn().await?;
+        let events = self.run_turn(0).await?;
 
         // Append Done event with current stats.
-        let stats = self.stats.lock().await.clone();
+        let stats = self.stats();
         let mut all_events = events;
         all_events.push(AgentEvent::Done { usage: stats });
 
@@ -220,9 +267,8 @@ impl AgentSession for Agent {
     }
 
     fn stats(&self) -> SessionTokenStats {
-        // We can't await here, so use try_lock.
         self.stats
-            .try_lock()
+            .lock()
             .map(|s| s.clone())
             .unwrap_or_default()
     }
@@ -232,16 +278,6 @@ impl AgentSession for Agent {
             "/help" => Ok("Available commands: /help, /model, /cost, /clear".to_string()),
             _ => Ok(format!("Unknown command: {cmd}")),
         }
-    }
-}
-
-/// Truncates a string to at most `max_len` characters, appending `...` if
-/// truncated.
-fn truncate_str(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        s
-    } else {
-        &s[..max_len]
     }
 }
 
@@ -255,7 +291,7 @@ mod tests {
     struct SimpleMockLLM;
 
     #[async_trait]
-    impl LLMClient for SimpleMockLLM {
+    impl kanata_types::llm::LLMClient for SimpleMockLLM {
         async fn chat_stream(
             &self,
             _messages: &[Message],
@@ -274,7 +310,7 @@ mod tests {
             Ok(Box::pin(stream::iter(events)))
         }
 
-        fn model_name(&self) -> &str {
+        fn model_name(&self) -> &'static str {
             "test-mock"
         }
     }
@@ -304,5 +340,50 @@ mod tests {
         let agent = Agent::new(Box::new(SimpleMockLLM), vec![], "");
         let result = agent.execute_command("/help", "").await.expect("cmd");
         assert!(result.contains("Available commands"));
+    }
+
+    #[test]
+    fn test_truncate_string_ascii() {
+        assert_eq!(truncate_string("hello", 10), "hello");
+        assert_eq!(truncate_string("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_string_utf8() {
+        // "你好世界" is 12 bytes (3 bytes per CJK char).
+        let s = "你好世界";
+        let result = truncate_string(s, 7);
+        // Should truncate at char boundary (6 bytes = 2 chars).
+        assert!(result.ends_with("..."));
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_build_assistant_content_text_only() {
+        let content = build_assistant_content("Hello!", &[]);
+        let blocks = content.as_array().expect("array");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "text");
+    }
+
+    #[test]
+    fn test_build_assistant_content_with_tool_use() {
+        let tools = vec![(
+            "tool_1".to_string(),
+            "Read".to_string(),
+            r#"{"path":"test.rs"}"#.to_string(),
+        )];
+        let content = build_assistant_content("Let me read that.", &tools);
+        let blocks = content.as_array().expect("array");
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["name"], "Read");
+    }
+
+    #[test]
+    fn test_build_assistant_content_empty() {
+        let content = build_assistant_content("", &[]);
+        assert!(content.is_null());
     }
 }

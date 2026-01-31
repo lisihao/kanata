@@ -41,6 +41,9 @@ impl Tool for ReadTool {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `KanataError` if the path parameter is missing or the file cannot be read.
     async fn execute(&self, input: serde_json::Value) -> Result<ToolResult, KanataError> {
         let path = input
             .get("path")

@@ -25,7 +25,10 @@ impl InMemorySkillRegistry {
     }
 
     /// Adds a skill definition to the registry.
+    ///
+    /// If a skill with the same name already exists, it is replaced.
     pub fn add(&mut self, skill: SkillDefinition) {
+        self.skills.retain(|s| s.name != skill.name);
         self.skills.push(skill);
     }
 }

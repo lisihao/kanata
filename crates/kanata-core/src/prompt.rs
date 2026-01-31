@@ -2,22 +2,22 @@
 
 use std::path::Path;
 
+use std::fmt::Write;
+
 use kanata_types::tool::ToolDefinition;
 
 /// Default system prompt used when no custom prompt file exists.
-const DEFAULT_SYSTEM_PROMPT: &str = r#"You are Kanata, an AI code assistant. You help users with software engineering tasks including reading, writing, and editing code, searching files, running commands, and more.
+const DEFAULT_SYSTEM_PROMPT: &str = r"You are Kanata, an AI code assistant. You help users with software engineering tasks including reading, writing, and editing code, searching files, running commands, and more.
 
-You have access to the following tools to interact with the user's codebase. Use them as needed to accomplish the task."#;
+You have access to the following tools to interact with the user's codebase. Use them as needed to accomplish the task.";
 
 /// Loads a system prompt from a file, falling back to the default.
 pub fn load_system_prompt(prompt_dir: Option<&Path>) -> String {
     if let Some(dir) = prompt_dir {
         let system_file = dir.join("system.md");
-        if system_file.exists() {
-            if let Ok(content) = std::fs::read_to_string(&system_file) {
-                tracing::info!(path = %system_file.display(), "Loaded custom system prompt");
-                return content;
-            }
+        if system_file.exists() && let Ok(content) = std::fs::read_to_string(&system_file) {
+            tracing::info!(path = %system_file.display(), "Loaded custom system prompt");
+            return content;
         }
     }
     tracing::debug!("Using default system prompt");
@@ -34,7 +34,7 @@ pub fn append_tool_descriptions(prompt: &str, tools: &[ToolDefinition]) -> Strin
     result.push_str("\n\n## Available Tools\n\n");
 
     for tool in tools {
-        result.push_str(&format!("### {}\n{}\n\n", tool.name, tool.description));
+        let _ = write!(result, "### {}\n{}\n\n", tool.name, tool.description);
     }
 
     result

@@ -26,6 +26,10 @@ impl ToolDispatcher {
     }
 
     /// Dispatches a tool call by name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `KanataError` if the tool is not found or execution fails.
     pub async fn dispatch(
         &self,
         name: &str,

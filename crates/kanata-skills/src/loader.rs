@@ -13,6 +13,10 @@ use kanata_types::skill::SkillDefinition;
 /// prompt_template: |
 ///   Analyze the following git diff and generate a commit message...
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or parsed as valid YAML.
 pub fn load_skill_from_yaml(path: &Path) -> Result<SkillDefinition, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
@@ -21,6 +25,10 @@ pub fn load_skill_from_yaml(path: &Path) -> Result<SkillDefinition, String> {
 }
 
 /// Loads all `.skill.yaml` files from a directory.
+///
+/// # Errors
+///
+/// Returns an error if the directory cannot be read or any skill file is invalid.
 pub fn load_skills_from_dir(dir: &Path) -> Result<Vec<SkillDefinition>, String> {
     if !dir.exists() {
         return Ok(Vec::new());

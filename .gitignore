@@ -1,14 +1,6 @@
-# Dependencies
-node_modules/
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# Build
-dist/
-build/
-*.egg-info/
+# Rust
+target/
+Cargo.lock
 
 # IDE
 .idea/

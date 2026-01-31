@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kanata-types",
+    "crates/kanata-cli",
+    "crates/kanata-core",
+    "crates/kanata-tools",
+    "crates/kanata-skills",
+    "crates/kanata-model",
+]
+
+[workspace.dependencies]
+# Async
+tokio = { version = "1.42", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# HTTP & Networking
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "stream", "rustls-tls"
+] }
+
+# CLI & TUI
+ratatui = "0.29"
+crossterm = "0.28"
+syntect = "5.2"
+termimad = "0.30"
+similar = "2.6"
+
+# File Operations
+globset = "0.4"
+regex = "1.11"
+walkdir = "2.5"
+
+# Error Handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = "0.4"
+uuid = { version = "1.11", features = ["v4"] }
+dirs = "5.0"
+clap = { version = "4.5", features = ["derive"] }
+
+# Template
+minijinja = "2.5"
+
+# Testing
+mockall = "0.13"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JUNJIE-DUAN/kanata"

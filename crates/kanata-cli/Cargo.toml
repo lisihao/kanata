@@ -1,0 +1,19 @@
+[package]
+name = "kanata-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kanata"
+path = "src/main.rs"
+
+[dependencies]
+kanata-types = { path = "../kanata-types" }
+kanata-core = { path = "../kanata-core" }
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
